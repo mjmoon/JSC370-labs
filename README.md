@@ -107,10 +107,40 @@ the MET data.
     the stations data:
 
 ``` r
+library(data.table)
+library(dtplyr) # translator between dplyr (tidyverse) and data.table
+library(dplyr)
+```
+
+    ## 
+    ## Attaching package: 'dplyr'
+
+    ## The following objects are masked from 'package:data.table':
+    ## 
+    ##     between, first, last
+
+    ## The following objects are masked from 'package:stats':
+    ## 
+    ##     filter, lag
+
+    ## The following objects are masked from 'package:base':
+    ## 
+    ##     intersect, setdiff, setequal, union
+
+``` r
+library(ggplot2)
+library(leaflet)
+```
+
+``` r
 # Download the data
 stations <- fread("ftp://ftp.ncdc.noaa.gov/pub/data/noaa/isd-history.csv")
 stations[, USAF := as.integer(USAF)]
+```
 
+    ## Warning in eval(jsub, SDenv, parent.frame()): NAs introduced by coercion
+
+``` r
 # Dealing with NAs and 999999
 stations[, USAF   := fifelse(USAF == 999999, NA_integer_, USAF)]
 stations[, CTRY   := fifelse(CTRY == "", NA_character_, CTRY)]
@@ -127,7 +157,40 @@ stations[, n := 1:.N, by = .(USAF)]
 stations <- stations[n == 1,][, n := NULL]
 ```
 
+*Read `met` dataset.*
+
+``` r
+if (!file.exists("met_all.gz")) {
+ download.file(
+      url = "https://raw.githubusercontent.com/JSC370/jsc370-2023/main/labs/lab03/met_all.gz",
+      destfile = "met_all.gz",
+      method   = "libcurl",
+      timeout  = 60
+      ) 
+}
+met <- data.table::fread("met_all.gz")
+```
+
 3.  Merge the data as we did during the lecture.
+
+``` r
+met <- merge(
+  x = met,
+  y = stations,
+  all.x = TRUE, all.y = FALSE,
+  by.x = "USAFID", by.y = "USAF"
+)
+```
+
+``` r
+met <- left_join(
+  met, stations, by = c("USAFID" = "USAF")
+)
+```
+
+``` r
+met_lz <- lazy_dt(met, immutable = FALSE)
+```
 
 ## Question 1: Representative station for the US
 
@@ -135,6 +198,88 @@ Across all weather stations, what is the median station in terms of
 temperature, wind speed, and atmospheric pressure? Look for the three
 weather stations that best represent continental US using the
 `quantile()` function. Do these three coincide?
+
+``` r
+# average for each station
+met_avg_lz <- met_lz |>
+  group_by(USAFID) |>
+  summarise(
+    across(
+      c(temp, wind.sp, atm.press),
+      function(x) mean(x, na.rm = TRUE)
+    )
+    # temp = mean(temp, na.rm = TRUE),
+    # wind.sp = mean(wind.sp, na.rm = TRUE),
+    # stm.press = mean(atm.press, na.rm = TRUE)
+  )
+```
+
+``` r
+# find medians of temp, wind.sp, atm.press
+met_med_lz <- met_avg_lz |>
+  summarise(across(
+    2:4,
+    function(x) quantile(x, probs = .5, na.rm = TRUE)
+  ))
+```
+
+``` r
+# temperature
+temp_us_id <- met_avg_lz |>
+  mutate(
+    d = abs(temp - met_med_lz |> pull(temp))
+    ) |>
+  arrange(d) |>
+  slice(1) |>
+  pull(USAFID)
+# wind speed
+wsp_us_id <- met_avg_lz |>
+  mutate(
+    d = abs(wind.sp - met_med_lz |> pull(wind.sp))
+    ) |>
+  arrange(d) |>
+  slice(1) |>
+  pull(USAFID)
+# atm speed
+atm_us_id <- met_avg_lz |>
+  mutate(
+    d = abs(atm.press - met_med_lz |> pull(atm.press))
+    ) |>
+  arrange(d) |>
+  slice(1) |>
+  pull(USAFID)
+cat(
+  "ID with median . . .",
+  "\n    temperature: ", temp_us_id, 
+  "\n    wind speed: ", wsp_us_id,
+  "\n    atm: ", atm_us_id
+)
+```
+
+    ## ID with median . . . 
+    ##     temperature:  720458 
+    ##     wind speed:  720929 
+    ##     atm:  722238
+
+``` r
+met_lz |>
+  select(USAFID, lon, lat) |>
+  distinct() |>
+  filter(USAFID %in% c(temp_us_id, wsp_us_id, atm_us_id))
+```
+
+    ## Source: local data table [4 x 3]
+    ## Call:   unique(`_DT1`[, .(USAFID, lon, lat)])[USAFID %in% c(temp_us_id, 
+    ##     wsp_us_id, atm_us_id)]
+    ## 
+    ##   USAFID   lon   lat
+    ##    <int> <dbl> <dbl>
+    ## 1 720458 -82.6  37.8
+    ## 2 720929 -92.0  45.5
+    ## 3 722238 -85.7  31.4
+    ## 4 722238 -85.7  31.3
+    ## 
+    ## # Use as.data.table()/as.data.frame()/as_tibble() to access results
 
 Knit the document, commit your changes, and save it on GitHub. Don’t
 forget to add `README.md` to the tree, the first time you render it.
