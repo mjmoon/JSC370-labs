@@ -2,9 +2,6 @@
 title: "Lab 05 - Data Wrangling"
 output: 
   github_document: default
-  tufte::tufte_html:
-    css: style.css
-link-citations: yes
 ---
 
 # Learning goals
