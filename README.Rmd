@@ -89,7 +89,7 @@ Once you are done setting up the project, you can now start working with the MET
 
 2. Load the met data from https://github.com/JSC370/jsc370-2023/blob/main/labs/lab03/met_all.gz or  (Use https://raw.githubusercontent.com/JSC370/jsc370-2023/main/labs/lab03/met_all.gz to download programmatically), and also the station data. For the latter, you can use the code we used during lecture to pre-process the stations data:
 
-```{r loadlibraries}
+```{r setup}
 library(data.table)
 library(dtplyr) # translator between dplyr (tidyverse) and data.table
 library(dplyr)
@@ -118,9 +118,9 @@ stations[, n := 1:.N, by = .(USAF)]
 stations <- stations[n == 1,][, n := NULL]
 ```
 
-_Read `met` dataset._
 
 ```{r}
+# read met dataset
 if (!file.exists("met_all.gz")) {
  download.file(
       url = "https://raw.githubusercontent.com/JSC370/jsc370-2023/main/labs/lab03/met_all.gz",
@@ -135,6 +135,7 @@ met <- data.table::fread("met_all.gz")
 3. Merge the data as we did during the lecture.
 
 ```{r}
+# data.table version
 met <- merge(
   x = met,
   y = stations,
@@ -144,12 +145,14 @@ met <- merge(
 ```
 
 ```{r eval=FALSE}
+# same operation in tidyverse (don't run)
 met <- left_join(
   met, stations, by = c("USAFID" = "USAF")
 )
 ```
 
 ```{r}
+# lazy version for faster tidyverse operation
 met_lz <- lazy_dt(met, immutable = FALSE)
 ```
 
@@ -160,27 +163,19 @@ Across all weather stations, what is the median station in terms of temperature,
 ```{r}
 # average for each station
 met_avg_lz <- met_lz |>
-  group_by(USAFID) |>
+  group_by(USAFID, STATE) |>  # keep state info for Q2 & Q3
   summarise(
     across(
-      c(temp, wind.sp, atm.press),
+      c(temp, wind.sp, atm.press, lon, lat),  # lon and lat for Q3
       function(x) mean(x, na.rm = TRUE)
-    )
-    # temp = mean(temp, na.rm = TRUE),
-    # wind.sp = mean(wind.sp, na.rm = TRUE),
-    # stm.press = mean(atm.press, na.rm = TRUE)
+    ), .groups = "drop"
   )
-```
-
-```{r}
 # find medians of temp, wind.sp, atm.press
 met_med_lz <- met_avg_lz |>
   summarise(across(
-    2:4,
+    3:5,
     function(x) quantile(x, probs = .5, na.rm = TRUE)
   ))
-```
-```{r}
 # temperature
 temp_us_id <- met_avg_lz |>
   mutate(
@@ -205,19 +200,53 @@ atm_us_id <- met_avg_lz |>
   arrange(d) |>
   slice(1) |>
   pull(USAFID)
-cat(
-  "ID with median . . .",
-  "\n    temperature: ", temp_us_id, 
-  "\n    wind speed: ", wsp_us_id,
-  "\n    atm: ", atm_us_id
-)
+# Display with the geolocation info
+met_lz |>
+  group_by(USAFID) |>
+  # smome stations have multiple values
+  summarise(lon = mean(lon), lat = mean(lat)) |> 
+  filter(USAFID %in% c(temp_us_id, wsp_us_id, atm_us_id)) 
 ```
 
 ```{r}
+# for "pretty" printing
 met_lz |>
-  select(USAFID, lon, lat) |>
-  distinct() |>
-  filter(USAFID %in% c(temp_us_id, wsp_us_id, atm_us_id))
+  group_by(USAFID) |>
+  # smome stations have multiple values
+  summarise(lon = mean(lon), lat = mean(lat)) |> 
+  filter(USAFID %in% c(temp_us_id, wsp_us_id, atm_us_id)) |>
+  mutate("Variable" = c("Temperature", "Wind speed", "Atmospheric pressure")) |>
+  select(Variable, USAFID, lon, lat) |>
+  as_tibble()
+```
+
+
+```{r eval=FALSE}
+# data.table version
+# mean per station
+station_avg <- met[ , .(
+  temp      = mean(temp, na.rm = TRUE),
+  wind.sp   = mean(wind.sp, na.rm = TRUE),
+  atm.press = mean(atm.press, na.rm = TRUE),
+  lat       = mean(lat),
+  lon       = mean(lon)
+), by = .(USAFID, STATE)] # keep state info for Q2 & Q3
+# medain across the US
+usa_median <- station_avg[ , .(
+  temp_50      = quantile(temp, probs = .5, na.rm = TRUE),
+  wind.sp_50   = quantile(wind.sp, probs = .5, na.rm = TRUE),
+  atm.press_50 = quantile(atm.press, probs = .5, na.rm = TRUE)
+)]
+# find the stations closest to the median values
+station_avg[ , d_temp := abs(temp - usa_median$temp_50)]
+station_avg[ , d_wind.sp   := abs(wind.sp - usa_median$wind.sp_50)]
+station_avg[ , d_atm.press := abs(atm.press - usa_median$atm.press_50)]
+# temperature
+station_avg[order(d_temp), .(USAFID, STATE, temp)][1]
+# wind speed
+station_avg[order(d_wind.sp), .(USAFID, STATE, wind.sp)][1]
+# atm pressure
+station_avg[order(d_atm.press), .(USAFID, STATE, atm.press)][1]
 ```
 
 Knit the document, commit your changes, and save it on GitHub. Don't forget to add `README.md` to the tree, the first time you render it.
@@ -227,8 +256,95 @@ Knit the document, commit your changes, and save it on GitHub. Don't forget to a
 Just like the previous question, you are asked to identify what is the most representative, the median, station per state. This time, instead of looking at one variable at a time, look at the euclidean distance. If multiple stations show in the median, select the one located at the lowest latitude.
 
 ```{r}
-
+# function for computing Euclidean distance
+udist <- function(pt1, pt2) {
+  sqrt(sum((pt1 - pt2)^2))
+}
+# example usage
+udist(c(1,1), c(3,3))
+# example usage
+udist(c(1,1,1), c(3,3,3))
 ```
+
+```{r}
+# tidyverse
+# compute median per state
+state_med_lz <- met_avg_lz |>
+  group_by(STATE) |>
+  summarise(
+    across(2:4, function(x) quantile(x, probs = .5, na.rm = TRUE),
+           .names = "{.col}_50"), # name columns with "_50"
+    .groups = "drop"
+  )
+# find the minimum Euclidean distance stations
+state_med_stations_lz <- met_avg_lz |>
+  left_join(state_med_lz, by = "STATE") |>
+  collect() |> rowwise() |> # to sum() row wise
+  mutate(d = udist(c(temp, wind.sp, atm.press), 
+                   c(temp_50, wind.sp_50, atm.press_50))) |>
+  group_by(STATE) |>
+  slice_min(d) # find the minimum d row
+state_med_stations_lz
+```
+
+Note that the result includes only 46 states. There are 48 state in continental US.
+
+```{r}
+# which states are missing?
+state_orig <- met |> distinct(STATE) |> pull(STATE) 
+state_46 <- state_med_stations_lz |> pull(STATE)
+state_missing <- state_orig[!state_orig %in% state_46]
+state_med_lz |>
+  filter(STATE %in% state_missing) |>
+  as_tibble()
+```
+
+All stations in ND and WA are missing atmospheric pressure values. One way of handling the issue would be ignoring any measurement with missing values when computing the Euclidean distance.
+
+```{r}
+# function for computing Euclidean distance
+udist_handle_missing <- function(pt1, pt2) {
+  pt1[is.na(pt1) | is.na(pt2)] <- 0
+  pt2[is.na(pt1) | is.na(pt2)] <- 0
+  sqrt(sum((pt1 - pt2)^2))
+}
+```
+
+```{r}
+# find the minimum Euclidean distance stations
+state_med_stations_lz_handle_missing <- met_avg_lz |>
+  left_join(state_med_lz, by = "STATE") |>
+  collect() |> rowwise() |> # to sum() row wise
+  mutate(d = udist_handle_missing(
+    c(temp, wind.sp, atm.press), 
+    c(temp_50, wind.sp_50, atm.press_50))) |>
+  group_by(STATE) |>
+  slice_min(d) # find the minimum d row
+state_med_stations_lz_handle_missing
+```
+
+
+```{r eval=FALSE}
+# data.table version
+# medain across the US
+station_avg[ , temp_state_50 := quantile(
+  temp, probs = .5, na.rm = TRUE
+  ), by = STATE]
+station_avg[ , wind.sp_state_50 := quantile(
+  wind.sp, probs = .5, na.rm = TRUE
+  ), by = STATE]
+station_avg[ , atm.press_state_50 := quantile(
+  atm.press, probs = .5, na.rm = TRUE
+  ), by = STATE]
+# find the stations closest to the median values
+station_avg[ , metdist := udist_handle_missing(
+  c(temp, wind.sp, atm.press),
+  c(temp_state_50, wind.sp_state_50, atm.press_state_50)),
+  by = 1:nrow(station_avg)] # by 1:nrow() has the same effect as row.wise()
+# select the top
+station_avg[ , .SD[which.min(metdist)], by = STATE]
+```
+
 
 Knit the doc and save it on GitHub.
 
@@ -236,9 +352,48 @@ Knit the doc and save it on GitHub.
 
 For each state, identify what is the station that is closest to the mid-point of the state. Combining these with the stations you identified in the previous question, use `leaflet()` to visualize all ~100 points in the same figure, applying different colors for those identified in this question.
 
-```{r}
-
+```{r warning=FALSE}
+# tidyverse
+# compute geospatial centre per state
+state_centre_lz <- met_avg_lz |>
+  group_by(STATE) |>
+  summarise(
+    across(c(lat, lon), function(x) quantile(x, probs = .5, na.rm = TRUE),
+           .names = "{.col}_50"), # name columns with "_50"
+    .groups = "drop"
+  )
+# find the minimum Euclidean distance stations
+state_centre_stations_lz <- met_avg_lz |>
+  left_join(state_centre_lz, by = "STATE") |>
+  collect() |> rowwise() |> # to sum() row wise
+  mutate(d = udist(c(lat, lon), 
+                   c(lat_50, lon_50))) |>
+  group_by(STATE) |>
+  slice_min(d) # find the minimum d row
+# map
+stations_map <- leaflet() |>
+  addProviderTiles("CartoDB.Positron") |>
+  addCircles(
+    data = state_centre_stations_lz,
+    lat = ~lat, lng = ~lon, popup = "Geospatial mid",
+    opacity = 1, fillOpacity = 1, radius = 20, color = "darkgreen"
+  ) |>
+  addCircles(
+    data = state_med_stations_lz_handle_missing,
+    lat = ~lat, lng = ~lon, popup = "Climate mid",
+    opacity = 1, fillOpacity = 1, radius = 20, color = "purple"
+  ) |>
+  addLegend(
+    colors = c("darkgreen", "purple"),
+    labels = c("Geospatially middle stations", "Climate representative stations")
+  )
+# use mapview::mapshot to convert the map to a static image file and
+# display on github (credit: Chan Yu)
+mapview::mapshot(stations_map, file = "mapview.png")
+stations_map
 ```
+
+_`data.table` version omitted. See Q3._
 
 Knit the doc and save it on GitHub.
 
@@ -253,7 +408,22 @@ Start by computing the states' average temperature. Use that measurement to clas
 - High: temp >= 25
 
 ```{r}
-
+# tidyverse
+met_hml_lz <- met_lz |>
+  group_by(STATE) |>
+  summarise(
+    n_entries = n(),
+    n_entries_na = sum(is.na(temp)),
+    n_stations = n_distinct(USAFID),
+    across(c(temp, wind.sp, atm.press), function(x) mean(x, na.rm = TRUE)),
+    .groups = "drop"
+  ) |>
+  mutate(
+    state_temp_cat = if_else(
+      temp < 20, "Low",
+      if_else(temp < 25, "Mid", "High")
+    )
+  )
 ```
 
 Once you are done with that, you can compute the following:
@@ -267,7 +437,40 @@ Once you are done with that, you can compute the following:
 All by the levels described before.
 
 ```{r}
+met_hml_lz |>
+  mutate(
+    state_temp_cat = factor(state_temp_cat, levels = c("High", "Mid", "Low")) # order
+  ) |>
+  group_by(state_temp_cat) |>
+  summarise(
+    n_state = n(),
+    n_stations = sum(n_stations),
+    n_records = sum(n_entries),
+    n_entries_na = sum(n_entries_na),
+    temp = mean(temp, na.rm = TRUE),
+    wind.sp = mean(wind.sp, na.rm = TRUE),
+    atm.press = mean(atm.press, na.rm = TRUE)
+  ) |>
+  collect()
+```
 
+```{r}
+# data.table
+met[ , state_temp := mean(temp, na.rm = TRUE), by = STATE]
+met[ , state_temp_cat := factor(fifelse(
+  state_temp < 20, "Low",
+  fifelse(state_temp < 25, "Mid", "High")
+), levels = c("High", "Mid", "Low"))]
+tab <- met[ , .(
+  n_state      = length(unique(STATE)),
+  n_stations   = length(unique(USAFID)),
+  n_entries    = .N,
+  n_entries_na = sum(is.na(temp)),
+  temp         = mean(temp, na.rm = TRUE),
+  wind.sp      = mean(wind.sp, na.rm = TRUE),
+  atm.press    = mean(atm.press, na.rm = TRUE)
+), keyby = state_temp_cat] # sort by the factor levels
+knitr::kable(tab) # knitr::kable() is works well for both html and pdf outputs
 ```
 
 Knit the document, commit your changes, and push them to GitHub. 
@@ -281,6 +484,36 @@ Let's practice running regression models with smooth functions on X. We need the
 
 - fit both a linear model and a spline model (use `gam()` with a cubic regression spline on wind speed). Summarize and plot the results from the models and interpret which model is the best fit and why.
 
-```{r}
+```{r warning=FALSE}
+met_med_tbl <- met_lz |>
+  group_by(USAFID) |>
+  summarise(
+    across(c(temp, wind.sp), function(x) quantile(x, probs = .5, na.rm = TRUE))
+  ) |>
+  collect() # turn into tibble before using ggplot
+ggplot(met_med_tbl, aes(x = wind.sp, y = temp)) +
+  theme_minimal() +
+  geom_point() +
+  geom_smooth(method = "lm", formula = y ~ x, col = "darkgreen") +
+  geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), col = "purple") +
+  labs(x = "Wind speed", y = "Temperature")
 
 ```
+
+
+```{r}
+lm_mod <- lm(temp ~ wind.sp, data = met_med_tbl)
+summary(lm_mod)
+plot(lm_mod)
+```
+
+
+```{r}
+library(mgcv)
+gam_mod <- gam(temp ~ s(wind.sp, bs = "cr", k = 10), data = met_med_tbl)
+summary(gam_mod)
+plot(gam_mod)
+```
+
+
+
